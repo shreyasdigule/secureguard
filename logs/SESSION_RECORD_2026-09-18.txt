@@ -1,0 +1,115 @@
+SECUREGUARD SESSION RECORD — 2026-09-18
+==========================================
+
+OBJECTIVE
+---------
+Close critical authentication loopholes in the SecureGuard Governance Model (SGGM).
+The original implementation trusted JWT claims as ground truth — stolen tokens = full
+persona takeover. Implemented defense-in-depth authentication with fresh MFA enforcement,
+dual-control supervisor approval, session binding, token freshness, and enhanced audit.
+
+FILES MODIFIED
+--------------
+
+1. keycloak_auth.py
+   - Added AuthContext fields: mfa_challenge_ts, device_fingerprint, token_jti,
+     token_issued_at, second_supervisor_approved
+   - Added methods: mfa_fresh(max_age=300s), token_fresh(max_age=900s),
+     dual_control_satisfied()
+   - validate_access_token() now accepts Request for device fingerprinting
+   - Extracts mfa_challenge_ts from JWT claims
+   - Config via env: SECUREGUARD_MFA_FRESHNESS, SECUREGUARD_TOKEN_MAX_AGE,
+     SECUREGUARD_DUAL_CONTROL
+
+2. keycloak_client.py
+   - create_test_token() now includes mfa_challenge_ts claim when mfa_verified=True
+
+3. pipeline.py
+   - _auth_gate() enforces fresh MFA (auth.mfa_fresh()) for DEGRADED/RESTRICTED
+   - RESTRICTED requires dual-control via shared store check
+   - action_description uses integer RPM: f"SET_SPEED = {int(to_speed_rpm)} RPM"
+   - Uses dual_control_store.check_dual_control() for runtime approval verification
+
+4. main.py
+   - current_auth() dependency enforces token freshness (15min default)
+   - Added /session/info endpoint for anomaly detection UI
+   - Added /auth/dual-control/approve|status|clear endpoints
+   - Audit middleware captures device fingerprint
+   - Uses dual_control_store for shared approval state
+
+5. evidence_log.py
+   - EvidenceRecord now includes: device_fingerprint, token_jti, dual_control_satisfied
+   - log_auth_rejection() captures device fingerprint
+   - Full identity context in tamper-evident ledger
+
+6. dual_control_store.py (NEW)
+   - Shared in-memory store for dual-control approvals
+   - Functions: get_approval, set_approval, check_dual_control, clear_approval,
+     get_all_approvals, clear_all
+   - Used by both main.py (API) and pipeline.py (auth gate)
+
+7. dashboard_app.py
+   - Identity Card now shows: Device FP, Token JTI, Dual-control status, Token freshness
+   - Evidence logging includes new auth fields
+   - Updated log_evidence() call with device_fingerprint, token_jti, dual_control_satisfied
+
+8. test_keycloak_auth.py
+   - Added tests for mfa_fresh(), token_fresh(), dual_control_satisfied()
+
+9. test_pipeline.py
+   - Updated assertions for "fresh step-up MFA" and "dual-control" error messages
+
+SECURITY LOOPHOLES CLOSED
+-------------------------
+
+| Before | After |
+|--------|-------|
+| Stale MFA (cached amr claim) | Fresh MFA challenge required (<5 min) for DEGRADED/RESTRICTED |
+| Single supervisor approval | RESTRICTED actions need TWO supervisors with fresh MFA |
+| Token replay/theft | Device fingerprint + JTI tracking + 15min max token age |
+| No session visibility | /session/info exposes auth context for anomaly detection |
+| Incomplete audit trail | Evidence log captures full identity context |
+
+AUTHORIZATION MATRIX
+--------------------
+
+| Subsystem State | Required Auth | Who Can Access |
+|----------------|---------------|----------------|
+| NORMAL | standard_rbac | operator, engineer, supervisor |
+| DEGRADED | fresh step-up MFA | Any role with fresh MFA |
+| RESTRICTED | fresh MFA + supervisor + dual-control | supervisor only (2 supervisors, fresh MFA) |
+| QUARANTINED | blocked | Nobody |
+
+TEST PROFILES
+-------------
+- operator01: roles=["operator"], mfa=False
+- supervisor01: roles=["supervisor","operator"], mfa=True
+- engineer01: roles=["engineer"], mfa=False
+- auditor01: roles=["auditor"], mfa=False (no operational role)
+
+CONFIGURATION (env vars)
+------------------------
+SECUREGUARD_MFA_FRESHNESS=300      # MFA validity window (seconds)
+SECUREGUARD_TOKEN_MAX_AGE=900      # Max token age before re-auth (seconds)
+SECUREGUARD_DUAL_CONTROL=1         # Enable dual-supervisor approval
+
+TEST RESULTS
+------------
+All 25 tests pass:
+- 12 keycloak_auth tests
+- 13 pipeline tests
+
+MANUAL VERIFICATION
+-------------------
+Verified via API:
+1. Normal operation with operator token ✓
+2. DEGRADED state blocks operator without MFA ✓
+3. DEGRADED state allows operator with fresh MFA ✓
+4. RESTRICTED state blocks supervisor without dual-control ✓
+5. Dual-control: first supervisor approves ✓
+6. Dual-control: second supervisor approves ✓
+7. RESTRICTED command succeeds after dual-control ✓
+
+GIT COMMIT
+----------
+All changes staged and committed.

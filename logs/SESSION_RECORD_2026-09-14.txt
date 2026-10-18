@@ -1,0 +1,121 @@
+SecureGuard Session Record - 2026-09-14
+=====================================
+
+Purpose
+-------
+Record the previous workday's SecureGuard and Keycloak activity, including setup steps, deployment corrections, auth hardening, and remaining production gaps.
+
+Environment
+-----------
+- Project folder: C:\Users\Veer\Desktop\SecureGuard-Governance-Model-SGGM-
+- Target Pi: Raspberry Pi running Keycloak and SecureGuard
+- Keycloak base URL: http://192.168.137.96:8080
+- Realm used: secureguard
+- Client used: secureguard-api
+- API audience expected: secureguard-api
+- Repo expected on Pi: /home/two/secureguard
+
+Key events from 2026-09-14
+-------------------------
+1. Keycloak setup and auth redesign
+- The project moved from local placeholder auth toward real Keycloak-based identity and role enforcement.
+- A dedicated realm named secureguard was used instead of the default master realm.
+- A client named secureguard-api was configured for OpenID Connect.
+- Direct access grants were enabled for testing access tokens.
+- Realm roles were created and assigned to users for RBAC.
+
+2. Role and user configuration
+- Created the operator role for standard operational controls.
+- Created the supervisor role for restricted actions and MFA-sensitive access.
+- Created users operator01 and supervisor01.
+- Assigned operator01 the operator role.
+- Assigned supervisor01 the supervisor role.
+- Required user account information to be completed before token issuance could work reliably.
+
+3. Token and network debugging
+- Initial tests were performed against the wrong host; Keycloak was not running on localhost.
+- The real Keycloak service was identified on the Pi at 192.168.137.96.
+- Token tests were run against the correct Keycloak endpoint.
+- Errors encountered included:
+  - invalid_grant
+  - account is not fully set up
+  - wrong credentials due to stale variables and confusion between different password sources
+- Important distinction identified:
+  - client secret is not the same as the Pi password
+  - Linux password for the Pi user is not a Keycloak password
+
+4. API security enforcement
+- Added secure token validation in keycloak_auth.py.
+- The validator checks:
+  - token signature via Keycloak JWKS
+  - issuer
+  - audience
+  - expiration
+  - issued-at
+  - subject
+  - realm_access roles
+- The API protected sensitive endpoints and stopped trusting request-supplied booleans.
+- The pipeline now consumes a trusted AuthContext instead of caller-controlled MFA or approval fields.
+- The app was updated so /command, /state, and /evidence require a valid bearer token.
+
+5. Dashboard and deployment correction
+- The dashboard received visual corrections after a pseudo-3D mockup caused layout issues.
+- The original compact process mimic was restored to a safer and stable layout.
+- A mistaken deployment via scp was identified and corrected.
+- The scp copy created a duplicate project folder on the Pi and copied a Windows .venv, which is not suitable for Linux.
+- The correct deployment method was established:
+  - push to GitHub
+  - pull on Pi
+  - use Linux venv inside the Pi repo
+
+6. Git and repo state findings
+- The project was pushed to GitHub on the main branch.
+- The Pi repo was confirmed to be /home/two/secureguard.
+- The Pi successfully pulled the auth update commit.
+- The Git workflow was treated as the source of truth going forward.
+
+7. Remaining production issue
+- The Keycloak Direct Grant token still did not guarantee a usable MFA claim in amr.
+- The API correctly blocked restricted actions when amr did not include otp.
+- This is the remaining problem to finish before final controlled access is considered fully complete.
+- The team agreed that the correct fix is to enforce MFA in the actual Keycloak Direct Grant flow, not weaken the app policy.
+
+Procedure established for future work
+------------------------------------
+Windows side:
+- review project changes
+- commit intended updates
+- push origin main
+
+Pi side:
+- cd /home/two
+- ls
+- find /home -maxdepth 3 -iname "*secureguard*" 2>/dev/null
+- if repo exists: cd /home/two/secureguard
+- if not: git clone <repo-url> secureguard
+- cd secureguard
+- python3 -m venv .venv
+- source .venv/bin/activate
+- pip install -r requirements.txt
+
+Start API:
+- cd /home/two/secureguard
+- source .venv/bin/activate
+- python3 -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+Start dashboard:
+- cd /home/two/secureguard
+- source .venv/bin/activate
+- export DISPLAY=:0
+- python3 dashboard_app.py
+
+Operational rule
+----------------
+- Do not trust client-supplied auth flags.
+- Use Keycloak-issued JWT claims as the source of truth.
+- MFA must be derived from amr including otp.
+- Supervisor access must be derived from supervisor role membership.
+
+Summary
+-------
+This was the main milestone day where the project moved from prototype logic to real Keycloak-based RBAC and MFA enforcement, with the remaining work focused on the OTP claim propagation in the actual Keycloak token flow.

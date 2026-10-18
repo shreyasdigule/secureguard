@@ -1,0 +1,265 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.dashboard — SecureGuard PySide6 operator console (container 2 of 2),
+#                       headless under Xvfb.
+#
+# Entry point : main_qt.py (thin launcher -> dashboard_qt.main, main_qt.py:23-28;
+#              dashboard_qt.py:1887-1916). This is the same module SecureGuard.spec
+#              packages as the SecureGuard.exe entry script.
+# Headless    : xvfb-run supplies the X display; QT_QPA_PLATFORM=offscreen keeps Qt
+#              off the window system. Xvfb is required regardless of the platform
+#              plugin because the 3D view (qt_view3d.py -> pyqtgraph.opengl ->
+#              QOpenGLWidget) still needs a real GL context, which is created
+#              through GLX/EGL against a display server.
+#
+# Two environment settings are load-bearing, not cosmetic:
+#
+#   QT_QPA_PLATFORM=offscreen
+#       Required for headless rendering. Measured on this repo: with the offscreen
+#       plugin and no font directory, QFontDatabase.families() returns an EMPTY
+#       list (0 families).
+#
+#   QT_QPA_FONTDIR=/usr/share/fonts/truetype/dejavu
+#       Required, because of that empty font database. Measured with the same
+#       probe: pointing QT_QPA_FONTDIR at a real font directory takes the family
+#       count from 0 to 175. With 0 families every QFontMetrics value is
+#       degenerate, so layout collapses and any text/metric assertion is
+#       meaningless. test_ui_compliance.py:599-603 documents the same zero-family
+#       behaviour and industrial_theme.resolve_mono_family() (industrial_theme.py:
+#       136-166) degrades to the generic "monospace" face — correct as a fallback,
+#       but the metrics behind it are not what a real font produces.
+#       The directory below is verified to exist and to contain .ttf files by a
+#       RUN assertion in this file, and again by the container HEALTHCHECK.
+#
+# Fonts are installed from the distro package fonts-dejavu-core (which owns
+# /usr/share/fonts/truetype/dejavu on Debian) rather than copied from the host.
+
+FROM python:3.12-slim-bookworm
+
+LABEL org.opencontainers.image.title="SecureGuard Dashboard" \
+      org.opencontainers.image.description="SecureGuard PySide6 operator console, headless under Xvfb" \
+      org.opencontainers.image.source="SecureGuard-Governance-Model-SGGM-"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Production default, stated explicitly. dashboard_qt.py:1490-1494 refuses to
+# auto-authenticate unless this is "1", the Quick Profile buttons are replaced by
+# an explanatory label (dashboard_qt.py:711-719), and keycloak_client.
+# create_test_token() raises in any other mode (keycloak_client.py:136-140).
+# Production therefore validates real Keycloak tokens pasted by the operator.
+ENV SECUREGUARD_TEST_MODE=0
+
+# pyqtgraph picks its Qt binding by scanning sys.modules (industrial_theme.py /
+# the guard in main_qt.py:16-20). main_qt.py sets this itself; it is repeated
+# here so the value is correct even for ad-hoc `docker run python -c ...` probes.
+ENV PYQTGRAPH_QT_LIB=PySide6
+
+# --- System packages ---------------------------------------------------------
+#   xvfb + xauth              xvfb-run is a shell script that shells out to
+#                             xauth to build a cookie file; without xauth it
+#                             aborts before ever starting the display.
+#   libgl1-mesa-dri           Mesa software rasteriser (llvmpipe / swrast). This is
+#   libglx-mesa0              what actually gives the 3D view a GL implementation;
+#   libegl-mesa0              there is no GPU in a container.
+#   libglu1-mesa              GLU, pulled in by PyOpenGL-adjacent tooling.
+#   libopengl0 libgl1 libegl1 libxkbcommon0 ...   base Qt runtime libraries.
+#   fonts-dejavu-core         provides /usr/share/fonts/truetype/dejavu.
+#   fontconfig                gives an operator fc-list for font debugging.
+#   procps                    pgrep, used by the container healthcheck.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        xvfb \
+        xauth \
+        procps \
+        fontconfig \
+        fonts-dejavu-core \
+        libgl1-mesa-dri \
+        libglx-mesa0 \
+        libegl-mesa0 \
+        libglu1-mesa \
+        libopengl0 \
+        libgl1 \
+        libegl1 \
+        libgomp1 \
+        libglib2.0-0 \
+        libfontconfig1 \
+        libdbus-1-3 \
+        libxkbcommon0 \
+        libxkbcommon-x11-0 \
+        libx11-6 \
+        libx11-xcb1 \
+        libxcb1 \
+        libxcb-cursor0 \
+        libxcb-glx0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-randr0 \
+        libxcb-render-util0 \
+        libxcb-render0 \
+        libxcb-shape0 \
+        libxcb-shm0 \
+        libxcb-sync1 \
+        libxcb-util1 \
+        libxcb-xfixes0 \
+        libxcb-xinerama0 \
+        libxcb-xkb1 \
+        libxext6 \
+        libxi6 \
+        libxrender1 \
+        libsm6 \
+        libice6 \
+ && rm -rf /var/lib/apt/lists/*
+
+# --- Headless rendering configuration ---------------------------------------
+# offscreen platform plugin: headless-safe, no window system required.
+ENV QT_QPA_PLATFORM=offscreen
+# Real font directory: without it the font database is empty and every text
+# metric is invalid. Path is asserted to exist just below.
+ENV QT_QPA_FONTDIR=/usr/share/fonts/truetype/dejavu
+# Force Mesa's software rasteriser: there is no GPU behind this container.
+ENV LIBGL_ALWAYS_SOFTWARE=1
+# Xvfb screen geometry, consumed by the xvfb-run --server-args flag below.
+ENV SG_XVFB_SCREEN=1920x1080x24
+
+WORKDIR /app
+
+# Assert the font directory really exists and really holds font files. If a
+# future base image moves the package payload, the build fails here instead of
+# shipping an image with a silently empty font database.
+RUN test -d /usr/share/fonts/truetype/dejavu \
+ && ls /usr/share/fonts/truetype/dejavu/*.ttf > /dev/null \
+ && fc-cache -f \
+ && echo "font dir OK:" && ls /usr/share/fonts/truetype/dejavu
+
+# --- Dependencies -------------------------------------------------------------
+# requirements.txt minus the API-only entries (uvicorn, httpx, pytest). The GUI
+# stack plus the modules dashboard_qt imports for auth and evidence: dashboard_qt
+# -> keycloak_auth, which imports fastapi at module level (keycloak_auth.py:15),
+# so fastapi/pydantic are needed here too even though no server runs.
+COPY requirements.txt /app/requirements.txt
+RUN python -m pip install --no-cache-dir \
+        "numpy>=1.24" \
+        "PySide6>=6.5" \
+        "pyqtgraph>=0.13" \
+        "PyOpenGL>=3.1" \
+        "fastapi" \
+        "pydantic" \
+        "PyJWT" \
+        "cryptography"
+
+# --- Application source -------------------------------------------------------
+# Every live module of the project, by name. Test modules, conftest.py, demo.py,
+# create_shortcut_qt.py, main.py (the API app) and the archive/ tree are not
+# shipped: main.py is present in the API image only, and tests/ is absent, which
+# is safe because tests/fixtures/test_keys.py is imported lazily and solely from
+# the SECUREGUARD_TEST_MODE=1 branch of keycloak_client.create_test_token().
+COPY app_paths.py              /app/app_paths.py
+COPY causal_xai.py             /app/causal_xai.py
+COPY charts_tab.py             /app/charts_tab.py
+COPY config.py                 /app/config.py
+COPY crypto_audit.py           /app/crypto_audit.py
+COPY dashboard_qt.py           /app/dashboard_qt.py
+COPY dashboard_sync.py         /app/dashboard_sync.py
+COPY digital_twin.py           /app/digital_twin.py
+COPY dual_control_store.py     /app/dual_control_store.py
+COPY evidence_log.py           /app/evidence_log.py
+COPY evidence_tab.py           /app/evidence_tab.py
+COPY hardware_telemetry.py     /app/hardware_telemetry.py
+COPY industrial_theme.py       /app/industrial_theme.py
+COPY keycloak_auth.py          /app/keycloak_auth.py
+COPY keycloak_client.py        /app/keycloak_client.py
+COPY main_qt.py                /app/main_qt.py
+COPY multi_dimensional_risk.py /app/multi_dimensional_risk.py
+COPY persistence.py            /app/persistence.py
+COPY physics_digital_twin.py   /app/physics_digital_twin.py
+COPY pipeline.py               /app/pipeline.py
+COPY qt_view3d.py              /app/qt_view3d.py
+COPY state_machine.py          /app/state_machine.py
+COPY timeout_utils.py          /app/timeout_utils.py
+COPY verify_log.py             /app/verify_log.py
+COPY view3d_tab.py             /app/view3d_tab.py
+
+# --- Persistent data directory -------------------------------------------------
+# Same resolution the API uses: SECUREGUARD_DATA_DIR wins (app_paths.py:40-42),
+# then the executable directory when frozen, then the module directory.
+ENV SECUREGUARD_DATA_DIR=/data
+
+# Keeps the Ed25519 ledger-signing key on the volume. crypto_audit generates it
+# at Path.home() / ".secureguard" / "audit_key.pem" (crypto_audit.py:309-321);
+# that path is outside app_paths.data_dir(), so without HOME=/data a replaced
+# container regenerates the key and every earlier signature then fails
+# verification (verify_log.py:173-179 verifies against the current signer's
+# public key).
+ENV HOME=/data
+
+# crypto_audit only honours AUDIT_KEY_PATH when the file already exists
+# (crypto_audit.py:301-307) and otherwise falls back to the Path.home() default,
+# so this must name the same file HOME resolves to.
+ENV AUDIT_KEY_PATH=/data/.secureguard/audit_key.pem
+
+# Keep Qt's own caches out of the evidence volume; only application state and
+# the audit key belong on /data.
+ENV XDG_CONFIG_HOME=/home/secureguard/.config \
+    XDG_CACHE_HOME=/home/secureguard/.cache \
+    XDG_DATA_HOME=/home/secureguard/.local/share \
+    XDG_RUNTIME_DIR=/tmp/runtime
+
+# --- Unprivileged runtime user -------------------------------------------------
+RUN groupadd --system --gid 10001 secureguard \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /home/secureguard --create-home \
+             --shell /usr/sbin/nologin secureguard \
+ && mkdir -p /data \
+ && chown -R 10001:10001 /data \
+ && install -d -o 10001 -g 10001 -m 700 /tmp/runtime \
+ && install -d -o 10001 -g 10001 /home/secureguard/.config \
+ && install -d -o 10001 -g 10001 /home/secureguard/.cache \
+ && install -d -o 10001 -g 10001 /home/secureguard/.local/share \
+ && chown -R 10001:10001 /home/secureguard
+
+# --- Build-time assertions (root, before privileges are dropped) -------------
+#  1. Qt, pyqtgraph and the OpenGL bindings import, and the Qt OpenGL widgets
+#     module loads its native GL libraries (a missing libGL/libGLX only shows up
+#     here or at first paint, which for a headless service is never).
+#  2. Byte-compilation of the shipped tree, as root: /app is root-owned, so this
+#     has to happen before the USER switch.
+#  3. The console module imports under the offscreen plugin with no display.
+#
+# The import in step 3 is pointed at a scratch data directory on purpose. It
+# transitively imports dual_control_store, whose _init_schema() runs at import
+# time (dual_control_store.py:334) and would otherwise leave root-owned SQLite
+# files in /data that the unprivileged runtime user could not write.
+RUN QT_QPA_PLATFORM=offscreen \
+    LIBGL_ALWAYS_SOFTWARE=1 \
+    python -c "import PySide6.QtOpenGL, PySide6.QtOpenGLWidgets, pyqtgraph, pyqtgraph.opengl, OpenGL; print('Qt/OpenGL import OK')"
+RUN python -m compileall -q /app
+RUN SECUREGUARD_DATA_DIR=/tmp/buildcheck \
+    QT_QPA_PLATFORM=offscreen \
+    QT_QPA_FONTDIR=/usr/share/fonts/truetype/dejavu \
+    python -c "import dashboard_qt; print('dashboard import OK')"
+
+# /data must reach the runtime layer empty: every file in it is created by the
+# unprivileged user on first start, so nothing is left root-owned and unwritable.
+RUN test -z "$(ls -A /data)" && echo "/data is empty: volume will be created at runtime"
+
+USER 10001:10001
+
+# --- Healthcheck ---------------------------------------------------------------
+# There is no HTTP surface in this container, so liveness is checked the only
+# honest ways available: the operator console process is alive, and the font
+# database it depends on is non-empty. The second half is the check that would
+# otherwise fail silently — a container can be "up" and still render every
+# string with degenerate metrics.
+# The bracketed first character keeps the pattern from matching the healthcheck
+# shell's own command line, which contains the pattern text.
+HEALTHCHECK --interval=30s --timeout=20s --start-period=45s --retries=3 \
+    CMD pgrep -f "[m]ain_qt\.py" > /dev/null \
+     && python -c "import sys; from PySide6.QtGui import QFontDatabase; from PySide6.QtWidgets import QApplication; a = QApplication(sys.argv); sys.exit(0 if QFontDatabase.families() else 1)" \
+     || exit 1
+
+# xvfb-run allocates a free display number (-a) and tears the server down when
+# the console exits. The screen size is passed through from SG_XVFB_SCREEN.
+CMD ["sh", "-c", "exec xvfb-run -a --server-args=\"-screen 0 ${SG_XVFB_SCREEN} -nolisten tcp\" python main_qt.py"]

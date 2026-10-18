@@ -1,0 +1,23 @@
+# ==============================================================================
+# SecureGuard Governance Model (SGGM) — Core Dependencies
+# ==============================================================================
+
+# GUI Framework & Scientific Plotting
+PySide6>=6.5.0
+pyqtgraph>=0.13.0
+PyOpenGL>=3.1.0
+
+# Core Computation & Scientific
+numpy>=1.24.0
+
+# API Service
+fastapi>=0.100.0
+pydantic>=2.0.0
+uvicorn>=0.23.0
+
+# Security, Cryptography & Identity
+PyJWT>=2.8.0
+cryptography>=41.0.0
+
+# Integration & Client Communication
+httpx>=0.24.0

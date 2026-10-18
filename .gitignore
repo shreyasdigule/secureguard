@@ -1,0 +1,129 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+# The PyInstaller recipe must stay tracked; the blanket pattern was hiding it.
+*.manifest
+*.spec
+!SecureGuard.spec
+
+# Databases & local state
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Unit test / coverage reporting
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Forensic evidence must never be committed. The ledger and its archive contain
+# operator usernames, roles, MFA state, commands and device fingerprints.
+evidence_log.jsonl
+evidence_archive/
+risk_thresholds.json
+.secureguard/
+
+# Development environments & Virtualenv
+.env
+.env.*
+!.env.example
+
+# Private keys and local credential files
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+credentials.json
+credentials.yaml
+credentials.yml
+
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# IDE & Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.kilo/
+
+# Operating System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# One-off source-rewriting helpers used during development
+_r.py
+_t.py
+debug_line.py
+fix_ascii.py
+reinsert_method.py
+replace_method.py
+
+# Archive legacy files — deliberately non-compliant; ignore all then re-include tracked ones.
+# Every re-include below is load-bearing: 9 of these files were deleted from the working
+# tree on the belief that git could restore them. Only 2 were tracked, so the other 9
+# were unrecoverable. Keep this list in sync with archive/deprecated/ contents.
+archive/*
+!archive/deprecated/
+archive/deprecated/*
+!archive/deprecated/ui_constants.py
+!archive/deprecated/ui_constants_legacy_pyqt6.py
+!archive/deprecated/check_status.py
+!archive/deprecated/create_shortcut.py
+!archive/deprecated/dashboard_app.py
+!archive/deprecated/dashboard_qt.py
+!archive/deprecated/dashboard_qt_final.py
+!archive/deprecated/dashboard_qt_part2.py
+!archive/deprecated/dashboard_qt_part3.py
+!archive/deprecated/residual_engine.py
+!archive/deprecated/secureguard.py

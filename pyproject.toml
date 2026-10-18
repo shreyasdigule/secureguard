@@ -1,0 +1,116 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secureguard-governance-model"
+version = "1.0.0"
+description = "Zero-trust defense-in-depth governance model and industrial HMI console for mission-critical cyber-physical systems"
+readme = "README.md"
+authors = [
+    { name = "SecureGuard Governance Model Contributors" }
+]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = [
+    "cybersecurity",
+    "zero-trust",
+    "industrial-control-systems",
+    "scada",
+    "keycloak",
+    "mfa",
+    "tamper-evident",
+    "digital-twin",
+    "pyside6",
+    "hmi",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "License :: Other/Proprietary License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+    "pyqtgraph>=0.13.0",
+    "PyOpenGL>=3.1.0",
+    "numpy>=1.24.0",
+    "fastapi>=0.100.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.23.0",
+    "PyJWT>=2.8.0",
+    "cryptography>=41.0.0",
+    "httpx>=0.24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+    "pyinstaller>=6.0.0",
+    "build>=1.0.0",
+    "wheel>=0.42.0",
+]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+]
+
+[project.scripts]
+secureguard = "main_qt:main"
+
+[project.urls]
+Homepage = "https://github.com/verx-09/SecureGuard-Governance-Model-SGGM-"
+Repository = "https://github.com/verx-09/SecureGuard-Governance-Model-SGGM-.git"
+Issues = "https://github.com/verx-09/SecureGuard-Governance-Model-SGGM-/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+exclude = ["archive*", "build*", "dist*", "tests*", "docs*", "logs*"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["test_*.py"]
+addopts = "-ra -q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:QFontDatabase.*",
+    "ignore::DeprecationWarning:PySide6.*",
+    "ignore::DeprecationWarning:pyqtgraph.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [
+    ".git",
+    "__pycache__",
+    "build",
+    "dist",
+    ".venv",
+    "archive",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]  # line length handled flexibly
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "test_*.py",
+    "tests/*",
+    "conftest.py",
+    "archive/*",
+    "SecureGuard.spec",
+]

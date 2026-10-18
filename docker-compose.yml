@@ -1,0 +1,156 @@
+# docker-compose.yml — SecureGuard: API service + headless operator console.
+#
+#   docker compose up -d --build
+#   docker compose logs -f api
+#   curl http://127.0.0.1:8000/          -> {"status":"SecureGuard is running", ...}
+#   curl http://127.0.0.1:8000/docs      -> FastAPI docs (unauthenticated!)
+#
+# Every credential-shaped value below is a placeholder read from the shell
+# environment. Nothing here is a real token or secret; supply real values through
+# an untracked .env file or the shell, e.g.
+#   $env:KEYCLOAK_ISSUER = "https://keycloak.example.com/realms/secureguard"
+#
+# SECUREGUARD_TEST_MODE is pinned to "0" in both images and repeated here so the
+# production posture is visible in one place. It is never "1": with "1" the API
+# accepts hermetically-signed test tokens (keycloak_auth.py:147-153) and the
+# console mints them for the Quick Profile buttons (dashboard_qt.py:711-719,
+# 1490-1494), which is a test-only path. Production validates real Keycloak
+# RS256 tokens against the realm JWKS.
+
+name: secureguard
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. API — FastAPI app from main:app, served by uvicorn on 0.0.0.0:8000
+  #    inside the container (--host 0.0.0.0 comes from Dockerfile.api).
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: secureguard-api:0.4.0
+    container_name: secureguard-api
+    restart: unless-stopped
+    # tini as PID 1 so the uvicorn worker is reaped properly on stop.
+    init: true
+    stop_grace_period: 30s
+    # Same invocation as Dockerfile.api's CMD; repeated here so the host binding
+    # and port are visible in one place. uvicorn's CLI needs the --flag form.
+    command:
+      - uvicorn
+      - main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    ports:
+      # Published on loopback only. The service has no authentication on `/`
+      # or `/docs`, so exposing 8000 on every host interface would publish the
+      # OpenAPI schema to the LAN. Change to "8000:8000" to reach it from
+      # another host, and put a TLS-terminating proxy in front of it.
+      - "127.0.0.1:8000:8000"
+    environment:
+      # --- data location (app_paths.py:34-70) ---
+      SECUREGUARD_DATA_DIR: /data
+      # HOME=/data puts the Ed25519 audit signing key (crypto_audit.py:309-321)
+      # inside the volume. AUDIT_KEY_PATH names the same file; crypto_audit only
+      # reads AUDIT_KEY_PATH when it already exists and otherwise falls back to
+      # Path.home(), so the two must agree.
+      HOME: /data
+      AUDIT_KEY_PATH: /data/.secureguard/audit_key.pem
+      # --- auth posture ---
+      SECUREGUARD_TEST_MODE: "0"
+      SECUREGUARD_DUAL_CONTROL: "1"
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://keycloak.internal:8080/realms/secureguard}
+      KEYCLOAK_JWKS_URL: ${KEYCLOAK_JWKS_URL:-http://keycloak.internal:8080/realms/secureguard/protocol/openid-connect/certs}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-secureguard-api}
+      KEYCLOAK_BASE_URL: ${KEYCLOAK_BASE_URL:-http://keycloak.internal:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-secureguard}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-secureguard-api}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+    volumes:
+      - secureguard-data:/data
+      # Bind-mount alternative for local inspection (ledger + SQLite):
+      #   ./docker-data:/data
+      # With a bind mount the host directory must be writable by uid 10001:
+      #   sudo chown -R 10001:10001 ./docker-data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---------------------------------------------------------------------------
+  # 2. Dashboard — PySide6 console under Xvfb, QT_QPA_PLATFORM=offscreen.
+  #    Headless by design: it renders and records evidence, but there is no VNC
+  #    or display export, so the window itself is not visible from the host.
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    image: secureguard-dashboard:0.4.0
+    container_name: secureguard-dashboard
+    restart: unless-stopped
+    init: true
+    # Qt writes evidence and holds SQLite handles on shutdown; give it room
+    # instead of letting the 10 s default SIGKILL interrupt the teardown path.
+    stop_grace_period: 45s
+    depends_on:
+      api:
+        # `service_healthy` resolves against the healthcheck declared in
+        # Dockerfile.api (GET / on 127.0.0.1:8000, asserting the status banner).
+        # Compose picks up an image-level healthcheck, so it is not repeated here.
+        condition: service_healthy
+    environment:
+      # --- data location ---
+      SECUREGUARD_DATA_DIR: /data
+      HOME: /data
+      AUDIT_KEY_PATH: /data/.secureguard/audit_key.pem
+      # --- headless rendering (see Dockerfile.dashboard for the full rationale) ---
+      QT_QPA_PLATFORM: offscreen
+      QT_QPA_FONTDIR: /usr/share/fonts/truetype/dejavu
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      SG_XVFB_SCREEN: ${SG_XVFB_SCREEN:-1920x1080x24}
+      # --- auth posture ---
+      SECUREGUARD_TEST_MODE: "0"
+      SECUREGUARD_DUAL_CONTROL: "1"
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://keycloak.internal:8080/realms/secureguard}
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-secureguard-api}
+      KEYCLOAK_BASE_URL: ${KEYCLOAK_BASE_URL:-http://keycloak.internal:8080}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-secureguard}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-secureguard-api}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-}
+      # The console runs its own in-process SecureGuardPipeline
+      # (dashboard_qt.py:1302) and makes no HTTP call to the API — there is no
+      # API base-URL setting anywhere in the code, so none is invented here.
+      # `depends_on` below is therefore start-up ordering, not a data path.
+    volumes:
+      - secureguard-data:/data
+      # Bind-mount alternative for local inspection:
+      #   ./docker-data:/data
+    # No `ports:` — the container exposes no network service. To watch it, use
+    #   docker compose logs -f dashboard
+    # or attach a viewer with:
+    #   docker compose exec dashboard x11vnc -display :99 -forever -shared   # not installed
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  # Shared between both services: evidence_log.jsonl, secureguard.db,
+  # dual_control.db (+ -wal/-shm), risk_thresholds.json and the Ed25519 audit
+  # key all resolve here through SECUREGUARD_DATA_DIR=/data.
+  #
+  # WARNING: both containers write this directory. evidence_log.py appends with
+  # a plain `open(LOG_PATH, "a")` at line 273 after reading the previous chain
+  # hash at line 92, with no inter-process lock, so two writers can record the
+  # same predecessor and fork the hash chain (verify_log then reports tampering).
+  # secureguard.db is opened through persistence._connect() (line 65) with no
+  # busy timeout, so concurrent writes can raise "database is locked".
+  # dual_control.db is WAL-mode with a 10 s busy timeout and tolerates this.
+  # If that matters for your deployment, give the dashboard its own volume:
+  #   dashboard: volumes: [secureguard-dashboard-data:/data]
+  secureguard-data:

@@ -1,0 +1,98 @@
+# .dockerignore — keep the build context small and leak-free.
+#
+# Both Dockerfiles COPY an explicit list of root-level modules, so anything
+# excluded here is build context that can never reach an image. Two consequences
+# worth stating: (1) excluding a file that a COPY references is a hard build
+# failure, so the module names below were checked against both COPY lists; (2)
+# the forensic artefacts that live in this working tree are excluded on purpose
+# — .gitignore already refuses to commit them because they contain operator
+# usernames, roles, MFA state, commands and device fingerprints, and baking a
+# developer's ledger into an image would copy exactly that data somewhere it was
+# never meant to go.
+#
+# Verified against this repository as it stands: the only archive/binary
+# payloads present are build/SecureGuard/base_library.zip (1.3 MB, PyInstaller
+# intermediate) and dist/SecureGuard.exe (84 MB). There are currently NO vendored
+# OpenGL DLLs or wheel archives anywhere in the tree — the Windows/OpenGL DLLs
+# the launcher used to ship are gone. The *.dll / *.whl / *.lib patterns below
+# are therefore a guard against them being reintroduced, not a description of
+# the current tree. Nothing the Linux runtime needs comes from this repo: Mesa
+# and the GLX/EGL stack are installed from apt in Dockerfile.dashboard.
+
+# --- Version control and agent scratch space --------------------------------
+.git/
+.gitignore
+.gitattributes
+.kilo/
+.kilocode/
+.opencode/
+.vscode/
+.idea/
+
+# --- Build outputs -----------------------------------------------------------
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.spec
+# Windows-only launchers; the container uses python main_qt.py directly.
+*.bat
+*.cmd
+
+# --- Runtime state (must come from the volume, never from the image) ---------
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.jsonl
+risk_thresholds.json
+.secureguard/
+evidence_archive/
+logs/
+
+# --- Secrets: never let a local key or .env reach an image layer --------------
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# --- Vendored native payloads (see note above) -------------------------------
+*.dll
+*.whl
+*.lib
+*.a
+*.pyd
+*.dylib
+*.so
+archive/
+vendor/
+vendored/
+third_party/
+
+# --- Docs and tests: not needed at runtime -----------------------------------
+docs/
+tests/
+test_*.py
+conftest.py
+demo.py
+create_shortcut_qt.py
+README.md
+*.md
+
+# --- OS cruft ----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~

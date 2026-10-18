@@ -1,0 +1,141 @@
+# syntax=docker/dockerfile:1
+#
+# Dockerfile.api — SecureGuard FastAPI service (container 1 of 2).
+#
+# Entry point  : main:app          (main.py:32 — module-level `app`, no __main__ block)
+# Started with : uvicorn main:app --host 0.0.0.0 --port 8000
+#               (the invocation documented in docs/ANALYSIS_AND_RUN_GUIDE_2026-09-18.md:194;
+#                uvicorn is a CLI, so binding to 0.0.0.0 needs NO source change)
+# Health       : GET / returns {"status": "SecureGuard is running", "version": "0.4.0"}
+#               (main.py:178-180). There is deliberately no /health route — the
+#               full route table is /, /command, /state/{id}, /evidence,
+#               /evidence/verify, /session/info, /auth/dual-control/*, plus
+#               FastAPI's /docs /redoc /openapi.json. GET / is the only
+#               unauthenticated liveness signal the service actually publishes,
+#               so the healthcheck below reads that instead of inventing one.
+#
+# Data dir     : /data, via SECUREGUARD_DATA_DIR (app_paths.py:34-70). A named
+#               volume is mounted there by docker-compose.yml.
+#
+# No build step exists in this project (pure source tree, packaged separately by
+# SecureGuard.spec), so this is a single-stage slim runtime.
+
+FROM python:3.12-slim-bookworm
+
+LABEL org.opencontainers.image.title="SecureGuard API" \
+      org.opencontainers.image.description="SecureGuard FastAPI service (main:app) on uvicorn" \
+      org.opencontainers.image.source="SecureGuard-Governance-Model-SGGM-"
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Production default, stated explicitly rather than left to the app default.
+# keycloak_auth.is_test_mode_enabled() only returns True for the exact string
+# "1" (keycloak_auth.py:42-44), and keycloak_client.create_test_token() refuses
+# to mint anything unless it is "1" (keycloak_client.py:136-140). With "0" the
+# API validates real Keycloak RS256 tokens against the realm JWKS and rejects
+# hermetic test tokens outright (keycloak_auth.py:147-153).
+ENV SECUREGUARD_TEST_MODE=0
+
+WORKDIR /app
+
+# --- Dependencies -----------------------------------------------------------
+# Only the packages the API import closure actually needs. requirements.txt
+# also declares PySide6 / pyqtgraph / PyOpenGL, but nothing reachable from
+# main.py imports Qt: main -> pipeline -> {causal_xai, multi_dimensional_risk,
+# physics_digital_twin, hardware_telemetry, state_machine, dual_control_store,
+# evidence_log, verify_log, crypto_audit, persistence} pulls numpy and the
+# stdlib, nothing else. The import assertion at the end of this file is what
+# keeps that claim honest: if anyone adds a Qt import to the API chain, the
+# image build fails instead of failing at runtime.
+COPY requirements.txt /app/requirements.txt
+RUN python -m pip install --no-cache-dir \
+        "numpy>=1.24" \
+        "fastapi" \
+        "pydantic" \
+        "uvicorn" \
+        "PyJWT" \
+        "cryptography"
+
+# --- Application source ------------------------------------------------------
+# Explicit file list. Every path here exists in the repository root; the live
+# API module set is main.py plus this closure. Test modules, conftest.py,
+# demo.py and the archive/ tree are deliberately not shipped.
+COPY app_paths.py            /app/app_paths.py
+COPY causal_xai.py           /app/causal_xai.py
+COPY config.py               /app/config.py
+COPY crypto_audit.py         /app/crypto_audit.py
+COPY digital_twin.py         /app/digital_twin.py
+COPY dual_control_store.py   /app/dual_control_store.py
+COPY evidence_log.py         /app/evidence_log.py
+COPY hardware_telemetry.py   /app/hardware_telemetry.py
+COPY keycloak_auth.py        /app/keycloak_auth.py
+COPY main.py                 /app/main.py
+COPY multi_dimensional_risk.py /app/multi_dimensional_risk.py
+COPY persistence.py          /app/persistence.py
+COPY physics_digital_twin.py /app/physics_digital_twin.py
+COPY pipeline.py             /app/pipeline.py
+COPY state_machine.py        /app/state_machine.py
+COPY timeout_utils.py        /app/timeout_utils.py
+COPY verify_log.py           /app/verify_log.py
+
+# --- Persistent data directory ----------------------------------------------
+# app_paths.data_dir() prefers SECUREGUARD_DATA_DIR and mkdir()s it
+# (app_paths.py:40-52); it then probes writability and falls back to
+# LOCALAPPDATA if the directory is read-only (app_paths.py:57-67). Making the
+# directory and its owner here means a fresh named volume inherits the right
+# ownership instead of starting root-owned.
+ENV SECUREGUARD_DATA_DIR=/data
+
+# HOME is pointed at the same directory on purpose. crypto_audit.get_audit_signer()
+# generates the Ed25519 ledger-signing key at Path.home() / ".secureguard" /
+# "audit_key.pem" (crypto_audit.py:309-321) — a path that is NOT covered by
+# app_paths.data_dir(). Left alone in a container it would land on the
+# container's writable layer and be regenerated on every `docker compose up`,
+# and verify_log.verify_chain() verifies signatures against the *current*
+# signer's public key (verify_log.py:173-179), so every previously signed
+# record would then fail verification. With HOME=/data the code's own default
+# path resolves inside the volume.
+ENV HOME=/data
+
+# Same file, addressed explicitly. Note that crypto_audit.py only honours
+# AUDIT_KEY_PATH when the file already exists (crypto_audit.py:301-307) and
+# falls through to the Path.home() default otherwise — which is why HOME must
+# agree with this value rather than replacing it.
+ENV AUDIT_KEY_PATH=/data/.secureguard/audit_key.pem
+
+# Unprivileged runtime user. uid/gid are pinned so a bind mount can be chowned
+# to match (see docs/CONTAINERS.md).
+RUN groupadd --system --gid 10001 secureguard \
+ && useradd --system --uid 10001 --gid 10001 --home-dir /data --no-create-home \
+             --shell /usr/sbin/nologin secureguard \
+ && mkdir -p /data \
+ && chown -R 10001:10001 /data
+
+# Build-time assertion: import the ASGI app the way uvicorn will. This fails the
+# build on a missing dependency or a broken relative import, which is the only
+# cheap way to catch import-closure drift without a source edit.
+#
+# SECUREGUARD_DATA_DIR is redirected to a scratch directory because importing
+# main reaches dual_control_store._init_schema(), which runs at import time
+# (dual_control_store.py:334) and would otherwise leave root-owned SQLite files
+# in /data that the unprivileged runtime user could not write.
+RUN SECUREGUARD_DATA_DIR=/tmp/buildcheck \
+    python -c "import main; assert main.app.title == 'SecureGuard'; print('API import OK:', main.app.title, main.app.version)"
+
+# /data must reach the runtime layer empty: every file in it is created by the
+# unprivileged user on first start.
+RUN test -z "$(ls -A /data)" && echo "/data is empty: volume will be created at runtime"
+
+USER 10001:10001
+
+EXPOSE 8000
+
+# Keep the port in sync with the healthcheck below and with the ports mapping
+# in docker-compose.yml — all three say 8000.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["python", "-c", "import json, sys, urllib.request; r = urllib.request.urlopen('http://127.0.0.1:8000/', timeout=4); d = json.load(r); sys.exit(0 if str(d.get('status', '')).startswith('SecureGuard') else 1)"]
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

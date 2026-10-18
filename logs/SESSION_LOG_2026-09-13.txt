@@ -1,0 +1,288 @@
+SecureGuard Session Log - 2026-09-13
+=====================================
+
+Purpose
+-------
+Record the work, errors, recovery steps, and final state from today's SecureGuard and Keycloak session.
+Secrets are intentionally excluded. Do not record passwords, client secrets, OTP codes, access tokens, or GitHub tokens in this file.
+
+1. Keycloak realm and client setup
+-----------------------------------
+- Connected to Keycloak running in Docker on the Raspberry Pi.
+- Initially viewed the master realm and saw default clients such as account, account-console, admin-cli, broker, and realm-management.
+- Identified the correct dedicated realm: secureguard.
+- Confirmed that secureguard was the current realm before creating SecureGuard configuration.
+- Created/configured the OpenID Connect client:
+  Client ID: secureguard-api
+  Client type: OpenID Connect
+  Client authentication: On
+  Authorization: Off
+  Standard flow: On
+  Direct access grants: On
+- Login settings were left empty for initial direct-token testing.
+- Client secret was located under Clients -> secureguard-api -> Credentials.
+- The client secret was never recorded in this log.
+
+2. Keycloak realm roles
+-----------------------
+- Created the realm role:
+  operator
+- Role description used:
+  Standard SecureGuard plant operator. May issue normal actuator commands when the subsystem is healthy and may view operational status.
+- Created/configured the supervisor role for restricted operational actions and MFA-based authorization.
+- The following roles were planned for the realm:
+  operator
+  supervisor
+  engineer
+  auditor
+- Built-in roles offline_access and uma_authorization were intentionally not assigned as SecureGuard operational roles.
+- Important distinction recorded: Realm roles were used, not client roles.
+
+3. Keycloak users
+-----------------
+- Created user operator01 in the secureguard realm.
+- Enabled operator01.
+- Assigned operator01 the operator realm role.
+- Set a permanent password for operator01 with Temporary set to Off.
+- Keycloak required personal information during login. A development email such as operator01@example.com was accepted for local testing.
+- Created/configured user supervisor01.
+- Enabled supervisor01.
+- Assigned supervisor01 the supervisor realm role.
+- Set supervisor01 password and completed the account-information form.
+- Supervisor MFA/OTP setup was attempted through the Keycloak account flow.
+- The user was instructed to keep operator01 without OTP for initial testing and use OTP for supervisor01.
+
+4. Keycloak access and network details
+---------------------------------------
+- Keycloak was not running on Windows localhost:8080.
+- Initial check showed localhost:8080 was closed.
+- Keycloak was found to be running on the Raspberry Pi.
+- Raspberry Pi addresses observed:
+  192.168.137.96 - LAN address used from Windows
+  172.17.0.1 - Docker bridge address, not used from Windows
+- Correct Keycloak browser base URL from Windows:
+  http://192.168.137.96:8080
+- Correct realm account URL:
+  http://192.168.137.96:8080/realms/secureguard/account
+- Correct token endpoint:
+  http://192.168.137.96:8080/realms/secureguard/protocol/openid-connect/token
+- The Pi user and hostname were identified as user two on host rasp5.
+
+5. Token testing
+----------------
+- Token requests were run from Windows PowerShell against the Pi Keycloak server.
+- The token request used grant_type=password, client_id=secureguard-api, client_secret, username, and password.
+- A successful operator token request was eventually completed with operator01.
+- Access tokens were intentionally not recorded in this file.
+- Error encountered:
+  invalid_grant - Invalid user credentials
+  Cause investigated: wrong password/old PowerShell variable and possible OTP/account configuration confusion.
+- Error encountered:
+  invalid_grant - Account is not fully set up
+  Cause: a required user action/account-information setup remained incomplete.
+- Account information was completed with an email address and saved.
+- Important correction: the client secret is different from Keycloak admin, operator, supervisor, and Pi SSH passwords.
+- Important correction: the scp password is the Linux password for Pi user two, not a Keycloak password.
+
+6. Application authentication changes
+--------------------------------------
+- Added keycloak_auth.py to validate Keycloak access tokens.
+- Added JWT validation using PyJWT and cryptography.
+- The validator checks:
+  token signature using Keycloak JWKS
+  issuer
+  audience
+  expiration
+  issued-at claim
+  subject claim
+- The validator extracts:
+  preferred_username
+  realm_access.roles
+  amr authentication methods
+- OTP evidence is detected from the amr claim containing otp.
+- Supervisor authority is derived from the supervisor realm role.
+- Updated main.py so /command requires an Authorization: Bearer token.
+- Removed caller-controlled mfa_stepup and supervisor_approved fields from the API command request.
+- Updated pipeline.py to use the trusted Keycloak AuthContext instead of request booleans.
+- Updated dashboard_app.py to accept a Keycloak access token instead of local MFA and supervisor-approval checkboxes.
+- Added requirements.txt containing FastAPI, Pydantic, Uvicorn, Matplotlib, PyJWT, cryptography, pytest, and httpx.
+- The dashboard remains a Tkinter desktop application. The API is suitable for running on the Pi; the GUI can remain on Windows.
+
+7. Dashboard visualization work and rollback
+---------------------------------------------
+- A pseudo-3D conveyor and digital-twin visualization was attempted.
+- The result had alignment and text-overlay problems.
+- The user requested the dashboard be returned to normal.
+- The added TwinSimulation renderer and related visualization wiring were removed.
+- The compact original process mimic was restored.
+- Authentication-related code changes were preserved separately from the visualization rollback.
+
+8. Incorrect deployment attempt and recovery
+---------------------------------------------
+- An scp copy was initially used from Windows:
+  scp -r "C:\\Users\\Veer\\Desktop\\SecureGuard-Governance-Model-SGGM-" two@192.168.137.96:/home/two/
+- This copied the Windows working tree into a separate Pi folder and also copied the Windows .venv, which should not be used on Linux.
+- The original working Pi application was then located at:
+  /home/two/secureguard
+- The copied folder was:
+  /home/two/SecureGuard-Governance-Model-SGGM-
+- The original Pi application was not overwritten because it was a separate folder.
+- The copied folder was removed/handled separately; the original /home/two/secureguard repository was preserved.
+- The Pi repository contained an untracked dashboard_app_old.py backup. It was intentionally not committed and was later targeted for removal because the user did not want the old dashboard pulled.
+- The correct deployment method was established:
+  Windows commit and push to GitHub
+  Pi git pull from origin/main
+- Future deployment should use Git, not scp.
+
+9. Git deployment
+------------------
+- Windows repository remote:
+  https://github.com/verx-09/SecureGuard-Governance-Model-SGGM-.git
+- Branch used:
+  main
+- Existing dashboard commit pulled on the Pi:
+  f6bf197 Industrial HMI-style dashboard: mimic diagram, alarm banner, trend charts
+- Keycloak integration commit was later pushed and pulled on the Pi:
+  a4fb8ee
+- The Pi successfully fast-forwarded from f6bf197 to a4fb8ee.
+- The pull reported six changed files:
+  dashboard_app.py
+  demo.py
+  keycloak_auth.py
+  main.py
+  pipeline.py
+  requirements.txt
+- keycloak_auth.py and requirements.txt were created on the Pi by the Git pull.
+- The Pi original repository was confirmed at:
+  /home/two/secureguard
+- Pi branch:
+  main
+- Pi remote:
+  origin -> https://github.com/verx-09/SecureGuard-Governance-Model-SGGM-.git
+- The Pi had an untracked dashboard_app_old.py file before cleanup. It was not part of the GitHub commit.
+
+10. Python environment issues
+-----------------------------
+- Debian/Raspberry Pi system Python rejected system-wide pip installation with:
+  externally-managed-environment
+- Correct solution: use a virtual environment.
+- Windows PowerShell also blocked Activate.ps1 because script execution was disabled.
+- A temporary process-scoped PowerShell execution policy was used:
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+- This was safe and automatically expires when the PowerShell process closes.
+- On Windows, the alternative is to run .venv\\Scripts\\python.exe directly without activation.
+- On the Pi, use:
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python -m pip install -r requirements.txt
+- The Windows .venv must never be copied to or reused on Linux.
+
+11. Final architecture direction
+---------------------------------
+- Raspberry Pi:
+  Keycloak on port 8080
+  SecureGuard FastAPI on port 8000
+  SQLite database
+  evidence log
+- Windows desktop:
+  Tkinter dashboard can remain on Windows
+  API calls should target http://192.168.137.96:8000
+- When API and Keycloak are both on the Pi, use this API environment setting on the Pi:
+  KEYCLOAK_ISSUER=http://127.0.0.1:8080/realms/secureguard
+  KEYCLOAK_AUDIENCE=secureguard-api
+- Start the API on the Pi with:
+  python -m uvicorn main:app --host 0.0.0.0 --port 8000
+- The dashboard/API must send:
+  Authorization: Bearer <Keycloak access token>
+- Do not trust mfa_stepup or supervisor_approved values supplied in JSON.
+
+12. Known validation and remaining work
+---------------------------------------
+- Python compilation of the Keycloak modules passed on Windows using the available Python launcher.
+- Import testing on Windows was initially blocked because FastAPI was not installed in the active system Python.
+- A requirements.txt was added to solve dependency installation in the project virtual environment.
+- The Pi must run pip installation inside its Linux .venv.
+- The Pi-side API still needs to be started and tested after the final pull.
+- The Keycloak access token must include the secureguard-api audience. If it does not, configure an Audience mapper in Keycloak for the secureguard-api client.
+- The API should be tested with:
+  GET http://192.168.137.96:8000/
+  GET /state/{subsystem_id} with a bearer token
+  POST /command with a bearer token and no mfa_stepup or supervisor_approved fields.
+- Do not put secrets into Git or this log.
+
+13. Standard workflow from now on
+---------------------------------
+Windows VS Code:
+  review changes
+  stage intended source/config files
+  commit
+  push origin main
+
+Raspberry Pi terminal:
+  cd /home/two/secureguard
+  git pull origin main
+  source .venv/bin/activate
+  python -m pip install -r requirements.txt
+  export KEYCLOAK_ISSUER="http://127.0.0.1:8080/realms/secureguard"
+  export KEYCLOAK_AUDIENCE="secureguard-api"
+  python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+14. Shell command and error appendix
+-------------------------------------
+This appendix records the main shell inputs and non-secret errors from the session. It is not a raw terminal transcript; passwords, tokens, client secrets, OTP codes, and GitHub tokens are omitted or replaced with placeholders.
+
+Windows PowerShell commands used:
+  Test-NetConnection localhost -Port 8080
+  scp -r "C:\\Users\\Veer\\Desktop\\SecureGuard-Governance-Model-SGGM-" two@192.168.137.96:/home/two/
+  ssh two@192.168.137.96
+  git status --short
+  git diff --stat
+  git log -1 --oneline
+  git pull origin main
+  py -3 -m venv .venv
+  .venv\\Scripts\\Activate.ps1
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+  python -m pip install -r requirements.txt
+  $env:KEYCLOAK_ISSUER = "http://192.168.137.96:8080/realms/secureguard"
+  $env:KEYCLOAK_AUDIENCE = "secureguard-api"
+  python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+PowerShell token request shape used:
+  $body = @{ grant_type = "password"; client_id = "secureguard-api"; client_secret = "<redacted>"; username = "<Keycloak user>"; password = "<redacted>" }
+  Invoke-RestMethod -Method Post -Uri "http://192.168.137.96:8080/realms/secureguard/protocol/openid-connect/token" -ContentType "application/x-www-form-urlencoded" -Body $body
+  $token.access_token
+
+Pi shell commands used:
+  hostname -I
+  cd /home/two
+  pwd
+  ls -la
+  cd /home/two/secureguard
+  git status --short
+  git remote -v
+  git branch --show-current
+  git pull origin main
+  ls keycloak_auth.py requirements.txt
+  source .venv/bin/activate
+  python3 -m venv .venv
+  python -m pip install -r requirements.txt
+  export KEYCLOAK_ISSUER="http://127.0.0.1:8080/realms/secureguard"
+  export KEYCLOAK_AUDIENCE="secureguard-api"
+  python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+Non-secret errors recorded:
+  WARNING: TCP connect to (::1 : 8080) failed
+  WARNING: TCP connect to (127.0.0.1 : 8080) failed
+  Permission denied, please try again.  (scp using the wrong Pi username/password)
+  Invoke-RestMethod: {"error":"invalid_grant","error_description":"Invalid user credentials"}
+  Invoke-RestMethod: {"error":"invalid_grant","error_description":"Account is not fully set up"}
+  error: externally-managed-environment
+  /usr/bin/python: No module named uvicorn
+  ModuleNotFoundError: No module named 'fastapi'
+  PowerShell: Activate.ps1 cannot be loaded because running scripts is disabled on this system
+
+Successful deployment result:
+  GitHub/Pi update fast-forwarded from f6bf197 to a4fb8ee.
+  Six files were pulled: dashboard_app.py, demo.py, keycloak_auth.py, main.py, pipeline.py, requirements.txt.
+
+End of session log.
